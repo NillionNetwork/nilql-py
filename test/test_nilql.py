@@ -11,6 +11,9 @@ import pytest
 
 import nilql
 
+from src.nilql.nilql import add_shamir_shares
+
+
 def to_hash_base64(output: Union[bytes, int]) -> str:
     """
     Helper function for converting a large binary output from a test into a
@@ -109,10 +112,25 @@ class TestKeys(TestCase):
 
     def test_key_operations_for_sum_with_multiple_nodes(self):
         """
-        Test key generate, dump, JSONify, and load for store operation
+        Test key generate, dump, JSONify, and load for sum operation
         with multiple nodes.
         """
         sk = nilql.SecretKey.generate({'nodes': [{}, {}, {}]}, {'sum': True})
+        sk_loaded = nilql.SecretKey.load(sk.dump())
+        self.assertTrue(isinstance(sk, nilql.SecretKey))
+        self.assertTrue(sk == sk_loaded)
+
+        sk_from_json = nilql.SecretKey.load(
+            json.loads(json.dumps(sk.dump()))
+        )
+        self.assertTrue(sk == sk_from_json)
+
+    def test_key_operations_for_redundancy_with_multiple_nodes(self):
+        """
+        Test key generate, dump, JSONify, and load for redundancy operation
+        with multiple nodes.
+        """
+        sk = nilql.SecretKey.generate({'nodes': [{}, {}, {}]}, {'redundancy': True})
         sk_loaded = nilql.SecretKey.load(sk.dump())
         self.assertTrue(isinstance(sk, nilql.SecretKey))
         self.assertTrue(sk == sk_loaded)
@@ -197,6 +215,21 @@ class TestKeys(TestCase):
             'l3O25x9CYiiA+XXTNPoT4WylTOXjeWj4GmoSoOPpZHo='
         )
 
+    def test_key_from_seed_for_redundancy_with_multiple_nodes(self):
+        """
+        Test key generation from seed for redundancy operation with multiple nodes.
+        """
+        sk_from_seed = nilql.SecretKey.generate({'nodes': [{}, {}, {}]}, {'redundancy': True}, SEED)
+        self.assertEqual(
+            to_hash_base64(sk_from_seed['material']),
+            'l3O25x9CYiiA+XXTNPoT4WylTOXjeWj4GmoSoOPpZHo='
+        )
+        sk = nilql.SecretKey.generate({'nodes': [{}, {}, {}]}, {'redundancy': True})
+        self.assertNotEqual(
+            to_hash_base64(sk['material']),
+            'l3O25x9CYiiA+XXTNPoT4WylTOXjeWj4GmoSoOPpZHo='
+        )
+
 class TestKeysError(TestCase):
     """
     Tests of errors thrown by methods of cryptographic key classes.
@@ -253,11 +286,11 @@ class TestFunctions(TestCase):
 
             plaintext = 123
             decrypted = nilql.decrypt(sk, nilql.encrypt(sk, plaintext))
-            self.assertTrue(plaintext == decrypted)
+            self.assertEqual(plaintext, decrypted)
 
             plaintext = 'abc'
             decrypted = nilql.decrypt(sk, nilql.encrypt(sk, plaintext))
-            self.assertTrue(plaintext == decrypted)
+            self.assertEqual(plaintext, decrypted)
 
     def test_encrypt_for_match(self):
         """
@@ -270,9 +303,9 @@ class TestFunctions(TestCase):
             ciphertext_three = nilql.encrypt(sk, 'abc')
             ciphertext_four = nilql.encrypt(sk, 'abc')
             ciphertext_five = nilql.encrypt(sk, 'ABC')
-            self.assertTrue(ciphertext_one == ciphertext_two)
-            self.assertTrue(ciphertext_three == ciphertext_four)
-            self.assertTrue(ciphertext_four != ciphertext_five)
+            self.assertEqual(ciphertext_one, ciphertext_two)
+            self.assertEqual(ciphertext_three, ciphertext_four)
+            self.assertNotEqual(ciphertext_four, ciphertext_five)
 
     def test_encrypt_decrypt_of_int_for_sum_single(self):
         """
@@ -283,7 +316,7 @@ class TestFunctions(TestCase):
         plaintext = 123
         ciphertext = nilql.encrypt(pk, plaintext)
         decrypted = nilql.decrypt(sk, ciphertext)
-        self.assertTrue(plaintext == decrypted)
+        self.assertEqual(plaintext, decrypted)
 
     def test_encrypt_decrypt_of_int_for_sum_multiple(self):
         """
@@ -293,7 +326,27 @@ class TestFunctions(TestCase):
         plaintext = 123
         ciphertext = nilql.encrypt(sk, plaintext)
         decrypted = nilql.decrypt(sk, ciphertext)
-        self.assertTrue(plaintext == decrypted)
+        self.assertEqual(plaintext, decrypted)
+
+    def test_encrypt_decrypt_of_int_for_redundancy_multiple(self):
+        """
+        Test encryption and decryption for redundancy operation with multiple nodes.
+        """
+        sk = nilql.SecretKey.generate({'nodes': [{}, {}, {}]}, {'redundancy': True})
+        plaintext = 123
+        ciphertext = nilql.encrypt(sk, plaintext)
+        decrypted = nilql.decrypt(sk, ciphertext)
+        self.assertEqual(plaintext, decrypted)
+
+    def test_encrypt_decrypt_of_int_for_redundancy_with_one_failure_multiple(self):
+        """
+        Test encryption and decryption for redundancy operation with multiple nodes.
+        """
+        sk = nilql.SecretKey.generate({'nodes': [{}, {}, {}]}, {'redundancy': True})
+        plaintext = 123
+        ciphertext = nilql.encrypt(sk, plaintext)
+        decrypted = nilql.decrypt(sk, ciphertext[1:])
+        self.assertEqual(plaintext, decrypted)
 
 class TestCiphertextRepresentations(TestCase):
     """
@@ -309,7 +362,7 @@ class TestCiphertextRepresentations(TestCase):
         plaintext = 'abc'
         ciphertext = ['Ifkz2Q==', '8nqHOQ==', '0uLWgw==']
         decrypted = nilql.decrypt(ck, ciphertext)
-        self.assertTrue(plaintext == decrypted)
+        self.assertEqual(plaintext, decrypted)
 
     def test_ciphertext_representation_for_sum_with_multiple_nodes(self):
         """
@@ -321,7 +374,19 @@ class TestCiphertextRepresentations(TestCase):
         plaintext = 123
         ciphertext = [456, 246, 4294967296 + 15 - 123 - 456]
         decrypted = nilql.decrypt(ck, ciphertext)
-        self.assertTrue(plaintext == decrypted)
+        self.assertEqual(plaintext, decrypted)
+
+    def test_ciphertext_representation_for_redundancy_with_multiple_nodes(self):
+        """
+        Test that ciphertext representation when storing in a multiple-node cluster.
+        """
+        cluster = {'nodes': [{}, {}, {}]}
+        operations = {'redundancy': True}
+        ck = nilql.ClusterKey.generate(cluster, operations)
+        plaintext = 123
+        ciphertext = [(1, 1382717699), (2, 2765435275), (3, 4148152851)]
+        decrypted = nilql.decrypt(ck, ciphertext)
+        self.assertEqual(plaintext, decrypted)
 
 class TestFunctionsErrors(TestCase):
     """
@@ -464,4 +529,19 @@ class TestSecureComputations(TestCase):
             (c0 + c1 + c2) % (2 ** 32 + 15)
         )
         decrypted = nilql.decrypt(sk, [a3, b3, c3])
-        self.assertTrue(decrypted == 123 + 456 + 789)
+        self.assertEqual(decrypted, 123 + 456 + 789)
+
+    def test_workflow_for_secure_redundancy_sum_with_multiple_nodes(self):
+        """
+        Test secure summation workflow for a cluster that has multiple nodes.
+        """
+        sk = nilql.SecretKey.generate({'nodes': [{}, {}, {}]}, {'redundancy': True})
+        (a0, b0, c0) = nilql.encrypt(sk, 123)
+        (a1, b1, c1) = nilql.encrypt(sk, 456)
+        (a2, b2, c2) = nilql.encrypt(sk, 789)
+        (a3, b3, c3) = add_shamir_shares(
+            add_shamir_shares([a0, b0, c0], [a1, b1, c1]),
+            [a2, b2, c2]
+        )
+        decrypted = nilql.decrypt(sk, [a3, b3, c3])
+        self.assertEqual(decrypted, 123 + 456 + 789)
